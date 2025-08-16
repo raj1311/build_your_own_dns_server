@@ -2,12 +2,13 @@
 #include <cstring>
 #include <sys/socket.h>
 #include <netinet/in.h>
+#include <arpa/inet.h>
 #include <unistd.h>
 #include <cerrno>
 #include "message.h"
 #include "server.h"
 
-int main() {
+int main(int argc, char** argv) {
     // Flush after every std::cout / std::cerr
     std::cout << std::unitbuf;
     std::cerr << std::unitbuf;
@@ -18,7 +19,31 @@ int main() {
     // You can use print statements as follows for debugging, they'll be visible when running tests.
     std::cout << "Logs from your program will appear here!" << std::endl;
 
-      // Uncomment this block to pass the first stage
+    // parse args: expect --resolver <ip:port>
+    if (argc < 3) {
+        std::cerr << "Usage: " << argv[0] << " --resolver <ip:port>" << std::endl;
+        return 1;
+    }
+    std::string resolver_arg;
+    for (int i = 1; i + 1 < argc; ++i) {
+        if (std::string(argv[i]) == "--resolver") {
+            resolver_arg = argv[i + 1];
+            break;
+        }
+    }
+    if (resolver_arg.empty()) {
+        std::cerr << "Missing --resolver argument" << std::endl;
+        return 1;
+    }
+    auto pos = resolver_arg.find(':');
+    if (pos == std::string::npos) {
+        std::cerr << "Resolver address must be in ip:port format" << std::endl;
+        return 1;
+    }
+    std::string resolver_ip = resolver_arg.substr(0, pos);
+    int resolver_port = std::stoi(resolver_arg.substr(pos + 1));
+
+      // create UDP socket to listen for tester requests
    int udpSocket;
    struct sockaddr_in clientAddress;
 
@@ -46,95 +71,134 @@ int main() {
        return 1;
    }
 
+   // prepare resolver sockaddr
+   sockaddr_in resolverAddr;
+   std::memset(&resolverAddr, 0, sizeof(resolverAddr));
+   resolverAddr.sin_family = AF_INET;
+   resolverAddr.sin_port = htons(static_cast<uint16_t>(resolver_port));
+   if (inet_pton(AF_INET, resolver_ip.c_str(), &resolverAddr.sin_addr) != 1) {
+       std::cerr << "Invalid resolver IP: " << resolver_ip << std::endl;
+       return 1;
+   }
+
+   // socket used for talking to resolver (ephemeral port)
+   int resolverSock = socket(AF_INET, SOCK_DGRAM, 0);
+   if (resolverSock == -1) {
+       std::cerr << "Resolver socket creation failed: " << strerror(errno) << std::endl;
+       return 1;
+   }
+   // set receive timeout so we don't block indefinitely waiting for resolver responses
+   struct timeval tv;
+   tv.tv_sec = 2;
+   tv.tv_usec = 0;
+   setsockopt(resolverSock, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
+
    int bytesRead;
-   char buffer[512];
+   uint8_t buffer[512];
    socklen_t clientAddrLen = sizeof(clientAddress);
 
    while (true) {
-       // Receive data
+       // Receive data from tester
        bytesRead = recvfrom(udpSocket, buffer, sizeof(buffer), 0, reinterpret_cast<struct sockaddr*>(&clientAddress), &clientAddrLen);
        if (bytesRead == -1) {
            perror("Error receiving data");
            break;
        }
 
-       // Safe null-termination (don't write past buffer)
-       if (bytesRead >= static_cast<int>(sizeof(buffer))) {
-           buffer[sizeof(buffer) - 1] = '\0';
-       } else {
-           buffer[bytesRead] = '\0';
+       std::cout << "Received " << bytesRead << " bytes" << std::endl;
+
+       // Parse the received data into a DNS message
+       dns::Message message;
+       if (!dns::Message::parse(reinterpret_cast<const uint8_t*>(buffer), static_cast<size_t>(bytesRead), message)) {
+           std::cerr << "Failed to parse DNS message" << std::endl;
+           continue; // Skip to next iteration
        }
-       std::cout << "Received " << bytesRead << " bytes: " << buffer << std::endl;
+       std::cout << "Parsed DNS message with " << message.questions.size() << " questions and "
+                 << message.answers.size() << " answers." << std::endl;
 
-         // Parse the received data into a DNS message
-        dns::Message message;
-         if (!dns::Message::parse(reinterpret_cast<const uint8_t*>(buffer), bytesRead, message)) {
-              std::cerr << "Failed to parse DNS message" << std::endl;
-              continue; // Skip to next iteration
-            }
-        std::cout << "Parsed DNS message with " << message.questions.size() << " questions and "
-                    << message.answers.size() << " answers." << std::endl;
+       if (message.header.question_count == 0) {
+           std::cerr << "No questions in the query; ignoring" << std::endl;
+           continue;
+       }
 
+       // For each question we need to send a separate query to the resolver (per stage requirements)
+       std::vector<dns::Answer> aggregated_answers;
+       bool any_error = false;
+       uint16_t combined_rcode = 0;
+       uint16_t recursion_available_flag = 0;
 
+       for (const auto& q : message.questions) {
+           // Build a single-question packet to forward
+           dns::Message forward_msg;
+           forward_msg.header = message.header;
+           forward_msg.header.question_count = 1;
+           forward_msg.header.answer_record_count = 0;
+           forward_msg.header.authority_record_count = 0;
+           forward_msg.header.additional_record_count = 0;
+           forward_msg.header.query_response_indicator = 0; // it's a query when sending to resolver
+           forward_msg.questions.clear();
+           forward_msg.questions.push_back(q);
+           forward_msg.answers.clear();
 
+           std::vector<uint8_t> forward_data = forward_msg.serialize();
 
-       // Create an empty response
-    dns::Header default_header{
-        .packet_id = message.header.packet_id,
-        .query_response_indicator = 1,
-        .opcode = message.header.opcode,
-        .authoritative_answer = 0,
-        .truncation = 0,
-        .recursion_desired = message.header.recursion_desired,
-        .recursion_available = 0,
-        .reserved = 0,
-        .response_code = static_cast<uint16_t>(message.header.opcode == 0 ? 0 : 4), // cast fixes narrowing
-        .question_count = message.header.question_count,
-        .answer_record_count = message.header.question_count,
-        .authority_record_count = 0,
-        .additional_record_count = 0,
-    };
+           // send to resolver
+           ssize_t sent = sendto(resolverSock, forward_data.data(), forward_data.size(), 0,
+                                 reinterpret_cast<struct sockaddr*>(&resolverAddr), sizeof(resolverAddr));
+           if (sent == -1) {
+               std::cerr << "Failed to send to resolver: " << strerror(errno) << std::endl;
+               any_error = true;
+               break;
+           }
 
-    // dns::Question default_question{
-    //     .names = message.questions[0].names,
-    //     .type = 1, // A record
-    //     .class_ = 1 // IN class
-    // };
+           // wait for response from resolver
+           uint8_t resp_buf[512];
+           sockaddr_in fromAddr;
+           socklen_t fromLen = sizeof(fromAddr);
+           ssize_t resp_len = recvfrom(resolverSock, resp_buf, sizeof(resp_buf), 0, reinterpret_cast<struct sockaddr*>(&fromAddr), &fromLen);
+           if (resp_len == -1) {
+               std::cerr << "No response from resolver or recv error: " << strerror(errno) << std::endl;
+               any_error = true;
+               break;
+           }
 
-    // Create a answer for each question
-    // For simplicity, we will just return a dummy answer with a fixed IP address
-    // In a real DNS server, you would look up the actual IP address for the domain
-    // For now, we will just return a dummy answer with a fixed IP address
+           // parse resolver response
+           dns::Message resolver_response;
+           if (!dns::Message::parse(resp_buf, static_cast<size_t>(resp_len), resolver_response)) {
+               std::cerr << "Failed to parse resolver response" << std::endl;
+               any_error = true;
+               break;
+           }
 
-    // Define a dummy implementation of getAnswersForQuestions
-        std::vector<dns::Answer> answers;
-        for (const auto& question : message.questions) {
-            dns::Answer answer{
-                .names = question.names,
-                .type = 1, // A record
-                .class_ = 1, // IN class
-                .time_to_live = 300, // Time to live
-                .length = 4, // Length of the data
-                .data = std::vector<uint8_t>{127, 0, 0, 1} // Example IP address
-            };
-            answers.push_back(answer);
-        }
+           // collect answers
+           for (const auto& a : resolver_response.answers) aggregated_answers.push_back(a);
 
-       // Create a response message
+           // collect flags
+           recursion_available_flag = recursion_available_flag || resolver_response.header.recursion_available;
+           if (resolver_response.header.response_code != 0) combined_rcode = resolver_response.header.response_code;
+       }
 
-    dns::Message response_message;
-       response_message.header = default_header;
-       response_message.answers = answers; // Use the answers from the received message
-       response_message.questions = message.questions; // Use the questions from the received message
+       // prepare final response back to tester
+       dns::Message response_message;
+       response_message.header = message.header; // start from original
+      // mark as a response (QR = 1)
+      response_message.header.query_response_indicator = 1;
+       response_message.header.answer_record_count = static_cast<uint16_t>(aggregated_answers.size());
+       response_message.answers = std::move(aggregated_answers);
+       response_message.questions = message.questions; // Include questions in the response
 
-      // Serialize the response message
-      std::vector<uint8_t> response_data = response_message.serialize();
+       // set additional flags in the response header
+       response_message.header.recursion_available = recursion_available_flag;
+       response_message.header.response_code = combined_rcode;
 
-      // Print the serialized data for debugging
-      std::cout << "Serialized response size: " << response_data.size() << " bytes" << std::endl;
+       // Serialize the response message
+       std::vector<uint8_t> response_data = response_message.serialize();
 
-      // Send response — send actual payload length and use clientAddrLen
-      if (sendto(udpSocket,
+       // Print the serialized data for debugging
+       std::cout << "Serialized response size: " << response_data.size() << " bytes" << std::endl;
+
+       // Send response — send actual payload length and use clientAddrLen
+       if (sendto(udpSocket,
                  response_data.data(),
                  response_data.size(),               // <-- use vector.size(), not sizeof(vector)
                  0,
