@@ -88,7 +88,7 @@ int main() {
         .recursion_desired = message.header.recursion_desired,
         .recursion_available = 0,
         .reserved = 0,
-        .response_code = message.header.opcode == 0 ? 0 : 4,
+        .response_code = static_cast<uint16_t>(message.header.opcode == 0 ? 0 : 4), // cast fixes narrowing
         .question_count = message.header.question_count,
         .answer_record_count = message.header.question_count,
         .authority_record_count = 0,
@@ -115,7 +115,7 @@ int main() {
                 .class_ = 1, // IN class
                 .time_to_live = 300, // Time to live
                 .length = 4, // Length of the data
-                .data = {std::byte{127}, std::byte{0}, std::byte{0}, std::byte{1}} // Example IP address
+                .data = std::vector<uint8_t>{127, 0, 0, 1} // Example IP address
             };
             answers.push_back(answer);
         }

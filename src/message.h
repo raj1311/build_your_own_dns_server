@@ -35,6 +35,41 @@ static inline bool read_u32_be(const uint8_t* buf, size_t len, size_t offset, ui
   return true;
 }
 
+// parse domain name with compression support
+static bool parse_name(const uint8_t* buf, size_t len, size_t &offset, std::vector<std::string> &labels) {
+  labels.clear();
+  size_t pos = offset;
+  bool jumped = false;
+  size_t max_depth = 128;
+  size_t depth = 0;
+
+  while (pos < len && depth++ < max_depth) {
+    uint8_t L = buf[pos];
+    if (L == 0) {
+      // end of name
+      if (!jumped) offset = pos + 1;
+      return true;
+    }
+    if ((L & 0xC0) == 0xC0) {
+      // pointer
+      if (pos + 1 >= len) return false;
+      uint16_t b1 = buf[pos] & 0x3F;
+      uint16_t b2 = buf[pos + 1];
+      uint16_t pointer = (b1 << 8) | b2;
+      if (pointer >= len) return false;
+      if (!jumped) offset = pos + 2; // advance original offset past the pointer
+      pos = pointer;
+      jumped = true;
+      continue;
+    }
+    // label
+    if (pos + 1 + L > len) return false;
+    labels.emplace_back(reinterpret_cast<const char*>(buf + pos + 1), L);
+    pos += 1 + L;
+  }
+  return false; // too deep or out of bounds
+}
+
 struct Header {
   uint16_t packet_id;
   uint16_t query_response_indicator : 1;
@@ -118,19 +153,7 @@ struct Question {
 
     // parse question from buffer starting at offset; updates offset to after question; returns false on error
     static bool parse(const uint8_t* buf, size_t len, size_t& offset, Question& q) {
-      q.names.clear();
-      // read labels until zero octet
-      while (offset < len) {
-        uint8_t L = buf[offset++];
-        if (L == 0) break; // end of name
-        if (L & 0xC0) {
-          // compression (pointer) not handled here — return false to keep parse simple for now
-          return false;
-        }
-        if (offset + L > len) return false;
-        q.names.emplace_back(reinterpret_cast<const char*>(buf + offset), L);
-        offset += L;
-      }
+      if (!parse_name(buf, len, offset, q.names)) return false;
       // need at least 4 bytes for type and class
       if (offset + 4 > len) return false;
       uint16_t v;
@@ -150,7 +173,7 @@ struct Answer{
   uint16_t class_;
   uint32_t time_to_live;
   uint16_t length;
-  std::byte data[4];
+  std::vector<uint8_t> data;
 
   // serialize answer into wire bytes (name, type, class, ttl, length, data)
     void serialize(std::vector<uint8_t>& out) const {
@@ -167,26 +190,13 @@ struct Answer{
       append_u16_be(out, class_);
       append_u32_be(out, time_to_live); // use 4 bytes for TTL
       append_u16_be(out, length);
-      // copy data bytes (length may be <= sizeof(data))
-      size_t to_copy = std::min<size_t>(length, sizeof(data));
-      out.insert(out.end(), reinterpret_cast<const uint8_t*>(data), reinterpret_cast<const uint8_t*>(data) + to_copy);
+      // copy data bytes
+      out.insert(out.end(), data.begin(), data.end());
     }
 
     // parse answer from buffer starting at offset; updates offset to after answer; returns false on error
     static bool parse(const uint8_t* buf, size_t len, size_t& offset, Answer& a) {
-      a.names.clear();
-      // read labels until zero octet
-      while (offset < len) {
-        uint8_t L = buf[offset++];
-        if (L == 0) break; // end of name
-        if (L & 0xC0) {
-          // compression (pointer) not handled here — return false to keep parse simple for now
-          return false;
-        }
-        if (offset + L > len) return false;
-        a.names.emplace_back(reinterpret_cast<const char*>(buf + offset), L);
-        offset += L;
-      }
+      if (!parse_name(buf, len, offset, a.names)) return false;
       // need at least 10 bytes for type(2), class(2), ttl(4), length(2)
       if (offset + 10 > len) return false;
       uint16_t v16;
@@ -204,15 +214,9 @@ struct Answer{
       a.length = v16;
       offset += 2;
       if (offset + a.length > len) return false;
-      if (a.length > sizeof(a.data)) {
-        // data too long; truncate defensively
-        size_t to_copy = sizeof(a.data);
-        std::memcpy(reinterpret_cast<uint8_t*>(a.data), buf + offset, to_copy);
-        a.length = static_cast<uint16_t>(to_copy);
-      } else {
-        std::memcpy(reinterpret_cast<uint8_t*>(a.data), buf + offset, a.length);
-      }
-      offset += v16; // advance by original length read into v16
+      a.data.resize(a.length);
+      std::memcpy(a.data.data(), buf + offset, a.length);
+      offset += a.length;
       return true;
     }
 
