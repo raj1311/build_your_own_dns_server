@@ -80,12 +80,12 @@ int main() {
 
        // Create an empty response
     dns::Header default_header{
-        .packet_id = 1234,
+        .packet_id = message.header.packet_id,
         .query_response_indicator = 1,
-        .opcode = 0,
+        .opcode = message.header.opcode,
         .authoritative_answer = 0,
         .truncation = 0,
-        .recursion_desired = 0,
+        .recursion_desired = message.header.recursion_desired,
         .recursion_available = 0,
         .reserved = 0,
         .response_code = 0,
@@ -118,7 +118,7 @@ int main() {
        response_message.answers.push_back(default_answer);
 
       // Serialize the response message
-      std::vector<uint8_t> response_data = message.serialize();
+      std::vector<uint8_t> response_data = response_message.serialize();
 
       // Print the serialized data for debugging
       std::cout << "Serialized response size: " << response_data.size() << " bytes" << std::endl;
