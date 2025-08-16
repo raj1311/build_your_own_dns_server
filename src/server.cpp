@@ -4,6 +4,7 @@
 #include <netinet/in.h>
 #include <unistd.h>
 #include "message.h"
+#include "server.h"
 
 int main() {
     // Flush after every std::cout / std::cerr
@@ -71,25 +72,45 @@ int main() {
         .recursion_available = 0,
         .reserved = 0,
         .response_code = 0,
-        .question_count = 0,
+        .question_count = 1,
         .answer_record_count = 0,
         .authority_record_count = 0,
         .additional_record_count = 0,
     };
 
+    dns::Question default_question{
+        .names = {"codecrafters","io"},
+        .type = 1, // A record
+        .class_ = 1 // IN class
+    };
+
+       // Create a response message
+
     dns::Message response_message;
        response_message.header = default_header;
+       response_message.questions.push_back(default_question);
 
        // Create an empty response
-       auto response = response_message.header.to_network_endianness();
+        std::vector<uint8_t> response;
+        serializePacket(response_message, response);
 
-       // Send response
-       if (sendto(udpSocket, response.data(), sizeof(response_message), 0, reinterpret_cast<struct sockaddr*>(&clientAddress), sizeof(clientAddress)) == -1) {
-           perror("Failed to send response");
-       }
+        // Send response
+        if (sendto(udpSocket, response.data(), sizeof(response_message), 0, reinterpret_cast<struct sockaddr *>(&clientAddress), sizeof(clientAddress)) == -1)
+        {
+            perror("Failed to send response");
+        }
    }
 
    close(udpSocket);
 
     return 0;
+}
+
+void serializePacket(dns::Message &response_message, std::vector<uint8_t> &response)
+{
+    response_message.header.serialize(response);
+    for (dns::Question question : response_message.questions)
+    {
+        question.serialize(response);
+    }
 }
