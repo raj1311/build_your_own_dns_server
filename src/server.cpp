@@ -3,7 +3,7 @@
 #include <sys/socket.h>
 #include <netinet/in.h>
 #include <unistd.h>
-#include <message.h>
+#include "message.h"
 
 int main() {
     // Flush after every std::cout / std::cerr
