@@ -3,6 +3,7 @@
 #include <sys/socket.h>
 #include <netinet/in.h>
 #include <unistd.h>
+#include <message.h>
 
 int main() {
     // Flush after every std::cout / std::cerr
@@ -58,11 +59,32 @@ int main() {
        buffer[bytesRead] = '\0';
        std::cout << "Received " << bytesRead << " bytes: " << buffer << std::endl;
 
+
        // Create an empty response
-       char response[1] = { '\0' };
+    dns::Header default_header{
+        .packet_id = 1234,
+        .query_response_indicator = 1,
+        .opcode = 0,
+        .authoritative_answer = 0,
+        .truncation = 0,
+        .recursion_desired = 0,
+        .recursion_available = 0,
+        .reserved = 0,
+        .response_code = 0,
+        .question_count = 0,
+        .answer_record_count = 0,
+        .authority_record_count = 0,
+        .additional_record_count = 0,
+    };
+
+    dns::Message response_message;
+       response_message.header = default_header;
+
+       // Create an empty response
+       auto response = response_message.header.to_network_endianness();
 
        // Send response
-       if (sendto(udpSocket, response, sizeof(response), 0, reinterpret_cast<struct sockaddr*>(&clientAddress), sizeof(clientAddress)) == -1) {
+       if (sendto(udpSocket, response.data(), sizeof(response_message), 0, reinterpret_cast<struct sockaddr*>(&clientAddress), sizeof(clientAddress)) == -1) {
            perror("Failed to send response");
        }
    }
