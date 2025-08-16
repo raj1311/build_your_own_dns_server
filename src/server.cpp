@@ -96,13 +96,13 @@ int main() {
     };
 
     dns::Question default_question{
-        .names = {"codecrafters","io"},
+        .names = message.questions[0].names,
         .type = 1, // A record
         .class_ = 1 // IN class
     };
 
     dns::Answer default_answer{
-        .names = {"codecrafters","io"},
+        .names = message.answers[0].names, // Use the names from the first question
         .type = 1, // A record
         .class_ = 1, // IN class
         .time_to_live = 300, // Time to live
