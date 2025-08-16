@@ -5,6 +5,8 @@
 #include <netinet/in.h>
 #include <vector>
 #include <string>
+#include <algorithm>
+#include <cstring>
 
 namespace dns {
 
@@ -13,9 +15,23 @@ static inline void append_u16_be(std::vector<uint8_t>& out, uint16_t v) {
   out.push_back(static_cast<uint8_t>((v >> 8) & 0xFF));
   out.push_back(static_cast<uint8_t>(v & 0xFF));
 }
+static inline void append_u32_be(std::vector<uint8_t>& out, uint32_t v) {
+  out.push_back(static_cast<uint8_t>((v >> 24) & 0xFF));
+  out.push_back(static_cast<uint8_t>((v >> 16) & 0xFF));
+  out.push_back(static_cast<uint8_t>((v >> 8) & 0xFF));
+  out.push_back(static_cast<uint8_t>(v & 0xFF));
+}
 static inline bool read_u16_be(const uint8_t* buf, size_t len, size_t offset, uint16_t &out) {
   if (offset + 2 > len) return false;
   out = static_cast<uint16_t>((buf[offset] << 8) | buf[offset + 1]);
+  return true;
+}
+static inline bool read_u32_be(const uint8_t* buf, size_t len, size_t offset, uint32_t &out) {
+  if (offset + 4 > len) return false;
+  out = (static_cast<uint32_t>(buf[offset]) << 24) |
+        (static_cast<uint32_t>(buf[offset + 1]) << 16) |
+        (static_cast<uint32_t>(buf[offset + 2]) << 8) |
+        (static_cast<uint32_t>(buf[offset + 3]));
   return true;
 }
 
@@ -149,9 +165,11 @@ struct Answer{
       out.push_back(0);
       append_u16_be(out, type);
       append_u16_be(out, class_);
-      append_u16_be(out, time_to_live);
+      append_u32_be(out, time_to_live); // use 4 bytes for TTL
       append_u16_be(out, length);
-      out.insert(out.end(), reinterpret_cast<const uint8_t*>(data), reinterpret_cast<const uint8_t*>(data) + length);
+      // copy data bytes (length may be <= sizeof(data))
+      size_t to_copy = std::min<size_t>(length, sizeof(data));
+      out.insert(out.end(), reinterpret_cast<const uint8_t*>(data), reinterpret_cast<const uint8_t*>(data) + to_copy);
     }
 
     // parse answer from buffer starting at offset; updates offset to after answer; returns false on error
@@ -169,25 +187,32 @@ struct Answer{
         a.names.emplace_back(reinterpret_cast<const char*>(buf + offset), L);
         offset += L;
       }
-      // need at least 10 bytes for type, class, ttl, length
+      // need at least 10 bytes for type(2), class(2), ttl(4), length(2)
       if (offset + 10 > len) return false;
-      uint16_t v;
-      if (!read_u16_be(buf, len, offset, v)) return false;
-      a.type = v;
+      uint16_t v16;
+      uint32_t v32;
+      if (!read_u16_be(buf, len, offset, v16)) return false;
+      a.type = v16;
       offset += 2;
-      if (!read_u16_be(buf, len, offset, v)) return false;
-      a.class_ = v;
+      if (!read_u16_be(buf, len, offset, v16)) return false;
+      a.class_ = v16;
       offset += 2;
-      if (!read_u16_be(buf, len, offset, v)) return false;
-      a.length = v;
+      if (!read_u32_be(buf, len, offset, v32)) return false;
+      a.time_to_live = v32;
+      offset += 4;
+      if (!read_u16_be(buf, len, offset, v16)) return false;
+      a.length = v16;
       offset += 2;
       if (offset + a.length > len) return false;
       if (a.length > sizeof(a.data)) {
         // data too long; truncate defensively
-        a.length = sizeof(a.data);
+        size_t to_copy = sizeof(a.data);
+        std::memcpy(reinterpret_cast<uint8_t*>(a.data), buf + offset, to_copy);
+        a.length = static_cast<uint16_t>(to_copy);
+      } else {
+        std::memcpy(reinterpret_cast<uint8_t*>(a.data), buf + offset, a.length);
       }
-      std::copy(buf + offset, buf + offset + a.length, reinterpret_cast<uint8_t*>(a.data));
-      offset += a.length;
+      offset += v16; // advance by original length read into v16
       return true;
     }
 
@@ -198,7 +223,7 @@ struct Message {
     std::vector<Question> questions; // Questions in the message
     std::vector<Answer> answers;     // Answers in the message
 
-    // serialize header + questions (header.question_count is set to questions.size())
+    // serialize header + questions + answers (header counts set automatically)
     std::vector<uint8_t> serialize() {
       std::vector<uint8_t> out;
       header.question_count = static_cast<uint16_t>(questions.size());
@@ -219,7 +244,13 @@ struct Message {
         if (!Question::parse(buf, len, offset, q)) return false;
         m.questions.push_back(std::move(q));
       }
-      // additional sections (answers/authority/additional) omitted for brevity
+      m.answers.clear();
+      for (uint16_t i = 0; i < m.header.answer_record_count; ++i) {
+        Answer a;
+        if (!Answer::parse(buf, len, offset, a)) return false;
+        m.answers.push_back(std::move(a));
+      }
+      // authority/additional parsing can be added similarly
       return true;
     }
 };
