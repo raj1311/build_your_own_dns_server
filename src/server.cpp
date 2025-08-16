@@ -3,6 +3,7 @@
 #include <sys/socket.h>
 #include <netinet/in.h>
 #include <unistd.h>
+#include <cerrno>
 #include "message.h"
 #include "server.h"
 
@@ -57,7 +58,12 @@ int main() {
            break;
        }
 
-       buffer[bytesRead] = '\0';
+       // Safe null-termination (don't write past buffer)
+       if (bytesRead >= static_cast<int>(sizeof(buffer))) {
+           buffer[sizeof(buffer) - 1] = '\0';
+       } else {
+           buffer[bytesRead] = '\0';
+       }
        std::cout << "Received " << bytesRead << " bytes: " << buffer << std::endl;
 
 
@@ -100,18 +106,21 @@ int main() {
        response_message.questions.push_back(default_question);
        response_message.answers.push_back(default_answer);
 
-        // Serialize the response message
-        std::vector<uint8_t> response_data = response_message.serialize();
+      // Serialize the response message
+      std::vector<uint8_t> response_data = response_message.serialize();
 
-        // Print the serialized data for debugging
-        std::cout << "Serialized response size: " << response_data.size() << " bytes" << std::endl;
+      // Print the serialized data for debugging
+      std::cout << "Serialized response size: " << response_data.size() << " bytes" << std::endl;
 
-
-        // Send response
-        if (sendto(udpSocket, response_data.data(), sizeof(response_data), 0, reinterpret_cast<struct sockaddr *>(&clientAddress), sizeof(clientAddress)) == -1)
-        {
-            perror("Failed to send response");
-        }
+      // Send response — send actual payload length and use clientAddrLen
+      if (sendto(udpSocket,
+                 response_data.data(),
+                 response_data.size(),               // <-- use vector.size(), not sizeof(vector)
+                 0,
+                 reinterpret_cast<struct sockaddr*>(&clientAddress),
+                 clientAddrLen) == -1) {
+          perror("Failed to send response");
+      }
    }
 
    close(udpSocket);
