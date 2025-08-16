@@ -88,7 +88,7 @@ int main() {
         .recursion_desired = message.header.recursion_desired,
         .recursion_available = 0,
         .reserved = 0,
-        .response_code = 0,
+        .response_code = message.header.opcode == 0 ? 0 : 4,
         .question_count = 1,
         .answer_record_count = 1,
         .authority_record_count = 0,
