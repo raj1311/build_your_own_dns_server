@@ -95,27 +95,27 @@ int main() {
         .additional_record_count = 0,
     };
 
-    dns::Question default_question{
-        .names = message.questions[0].names,
-        .type = 1, // A record
-        .class_ = 1 // IN class
-    };
+    // dns::Question default_question{
+    //     .names = message.questions[0].names,
+    //     .type = 1, // A record
+    //     .class_ = 1 // IN class
+    // };
 
-    dns::Answer default_answer{
-        .names = message.answers[0].names, // Use the names from the first question
-        .type = 1, // A record
-        .class_ = 1, // IN class
-        .time_to_live = 300, // Time to live
-        .length = 4, // Length of the data
-        .data = {std::byte{127}, std::byte{0}, std::byte{0}, std::byte{1}}
-    }; // Example IP address
+    // dns::Answer default_answer{
+    //     .names = message.answers[0].names, // Use the names from the first question
+    //     .type = 1, // A record
+    //     .class_ = 1, // IN class
+    //     .time_to_live = 300, // Time to live
+    //     .length = 4, // Length of the data
+    //     .data = {std::byte{127}, std::byte{0}, std::byte{0}, std::byte{1}}
+    // }; // Example IP address
 
        // Create a response message
 
     dns::Message response_message;
        response_message.header = default_header;
-       response_message.questions.push_back(default_question);
-       response_message.answers.push_back(default_answer);
+       response_message.answers = message.answers; // Use the answers from the received message
+       response_message.questions = message.questions; // Use the questions from the received message
 
       // Serialize the response message
       std::vector<uint8_t> response_data = response_message.serialize();
