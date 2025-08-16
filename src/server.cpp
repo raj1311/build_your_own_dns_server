@@ -84,18 +84,31 @@ int main() {
         .class_ = 1 // IN class
     };
 
+    dns::Answer default_answer{
+        .names = {"codecrafters","io"},
+        .type = 1, // A record
+        .class_ = 1, // IN class
+        .time_to_live = 300, // Time to live
+        .length = 4, // Length of the data
+        .data = {std::byte{127}, std::byte{0}, std::byte{0}, std::byte{1}}
+    }; // Example IP address
+
        // Create a response message
 
     dns::Message response_message;
        response_message.header = default_header;
        response_message.questions.push_back(default_question);
+       response_message.answers.push_back(default_answer);
 
-       // Create an empty response
-        std::vector<uint8_t> response;
-        serializePacket(response_message, response);
+        // Serialize the response message
+        std::vector<uint8_t> response_data = response_message.serialize();
+
+        // Print the serialized data for debugging
+        std::cout << "Serialized response size: " << response_data.size() << " bytes" << std::endl;
+
 
         // Send response
-        if (sendto(udpSocket, response.data(), sizeof(response_message), 0, reinterpret_cast<struct sockaddr *>(&clientAddress), sizeof(clientAddress)) == -1)
+        if (sendto(udpSocket, response_data.data(), sizeof(response_data), 0, reinterpret_cast<struct sockaddr *>(&clientAddress), sizeof(clientAddress)) == -1)
         {
             perror("Failed to send response");
         }

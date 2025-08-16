@@ -128,16 +128,84 @@ struct Question {
     }
 };
 
+struct Answer{
+  std::vector<std::string> names;
+  uint16_t type;
+  uint16_t class_;
+  uint32_t time_to_live;
+  uint16_t length;
+  std::byte data[4];
+
+  // serialize answer into wire bytes (name, type, class, ttl, length, data)
+    void serialize(std::vector<uint8_t>& out) const {
+      for (const auto& label : names) {
+        if (label.size() > 63) {
+          // label too long; truncate defensively
+        }
+        out.push_back(static_cast<uint8_t>(label.size()));
+        out.insert(out.end(), label.begin(), label.end());
+      }
+      // terminating zero length label
+      out.push_back(0);
+      append_u16_be(out, type);
+      append_u16_be(out, class_);
+      append_u16_be(out, time_to_live);
+      append_u16_be(out, length);
+      out.insert(out.end(), reinterpret_cast<const uint8_t*>(data), reinterpret_cast<const uint8_t*>(data) + length);
+    }
+
+    // parse answer from buffer starting at offset; updates offset to after answer; returns false on error
+    static bool parse(const uint8_t* buf, size_t len, size_t& offset, Answer& a) {
+      a.names.clear();
+      // read labels until zero octet
+      while (offset < len) {
+        uint8_t L = buf[offset++];
+        if (L == 0) break; // end of name
+        if (L & 0xC0) {
+          // compression (pointer) not handled here — return false to keep parse simple for now
+          return false;
+        }
+        if (offset + L > len) return false;
+        a.names.emplace_back(reinterpret_cast<const char*>(buf + offset), L);
+        offset += L;
+      }
+      // need at least 10 bytes for type, class, ttl, length
+      if (offset + 10 > len) return false;
+      uint16_t v;
+      if (!read_u16_be(buf, len, offset, v)) return false;
+      a.type = v;
+      offset += 2;
+      if (!read_u16_be(buf, len, offset, v)) return false;
+      a.class_ = v;
+      offset += 2;
+      if (!read_u16_be(buf, len, offset, v)) return false;
+      a.length = v;
+      offset += 2;
+      if (offset + a.length > len) return false;
+      if (a.length > sizeof(a.data)) {
+        // data too long; truncate defensively
+        a.length = sizeof(a.data);
+      }
+      std::copy(buf + offset, buf + offset + a.length, reinterpret_cast<uint8_t*>(a.data));
+      offset += a.length;
+      return true;
+    }
+
+};
+
 struct Message {
     Header header;
     std::vector<Question> questions; // Questions in the message
+    std::vector<Answer> answers;     // Answers in the message
 
     // serialize header + questions (header.question_count is set to questions.size())
     std::vector<uint8_t> serialize() {
       std::vector<uint8_t> out;
       header.question_count = static_cast<uint16_t>(questions.size());
+      header.answer_record_count = static_cast<uint16_t>(answers.size());
       header.serialize(out);
       for (const auto& q : questions) q.serialize(out);
+      for (const auto& a : answers) a.serialize(out);
       return out;
     }
 
