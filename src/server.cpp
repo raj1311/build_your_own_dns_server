@@ -89,7 +89,7 @@ int main() {
         .recursion_available = 0,
         .reserved = 0,
         .response_code = message.header.opcode == 0 ? 0 : 4,
-        .question_count = message.header,
+        .question_count = message.header.question_count,
         .answer_record_count = message.header.answer_record_count,
         .authority_record_count = 0,
         .additional_record_count = 0,
