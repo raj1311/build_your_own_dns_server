@@ -66,6 +66,17 @@ int main() {
        }
        std::cout << "Received " << bytesRead << " bytes: " << buffer << std::endl;
 
+         // Parse the received data into a DNS message
+        dns::Message message;
+         if (!dns::Message::parse(reinterpret_cast<const uint8_t*>(buffer), bytesRead, message)) {
+              std::cerr << "Failed to parse DNS message" << std::endl;
+              continue; // Skip to next iteration
+            }
+        std::cout << "Parsed DNS message with " << message.questions.size() << " questions and "
+                    << message.answers.size() << " answers." << std::endl;
+
+
+
 
        // Create an empty response
     dns::Header default_header{
@@ -107,7 +118,7 @@ int main() {
        response_message.answers.push_back(default_answer);
 
       // Serialize the response message
-      std::vector<uint8_t> response_data = response_message.serialize();
+      std::vector<uint8_t> response_data = message.serialize();
 
       // Print the serialized data for debugging
       std::cout << "Serialized response size: " << response_data.size() << " bytes" << std::endl;
