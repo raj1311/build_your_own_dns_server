@@ -73,7 +73,7 @@ int main() {
         .reserved = 0,
         .response_code = 0,
         .question_count = 1,
-        .answer_record_count = 0,
+        .answer_record_count = 1,
         .authority_record_count = 0,
         .additional_record_count = 0,
     };
